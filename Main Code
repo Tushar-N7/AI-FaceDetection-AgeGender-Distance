@@ -1,0 +1,176 @@
+import cv2
+import math
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+def highlightFace(net, frame, conf_threshold=0.7):
+    frameOpencvDnn = frame.copy()
+    frameHeight = frameOpencvDnn.shape[0]
+    frameWidth = frameOpencvDnn.shape[1]
+    blob = cv2.dnn.blobFromImage(frameOpencvDnn, 1.0, (300, 300), [104, 117, 123], swapRB=False)
+    
+    net.setInput(blob)
+    detections = net.forward()
+    faceBoxes = []
+    for i in range(detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+        if confidence > conf_threshold:
+            x1 = int(detections[0, 0, i, 3] * frameWidth)
+            y1 = int(detections[0, 0, i, 4] * frameHeight)
+            x2 = int(detections[0, 0, i, 5] * frameWidth)
+            y2 = int(detections[0, 0, i, 6] * frameHeight)
+            faceBoxes.append([x1, y1, x2, y2])
+    return frameOpencvDnn, faceBoxes
+
+def calculate_distance(known_width, focal_length, face_width_in_frame):
+    if face_width_in_frame == 0:
+        return None
+    distance = (known_width * focal_length) / face_width_in_frame
+    return distance
+
+def calculate_distance_between_faces(face1, face2):
+    x1, y1 = face1
+    x2, y2 = face2
+    pixel_distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+    return pixel_distance
+
+def send_email(subject, body):
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587  # Port for TLS
+    sender_email = 'Sender_Email_id'
+    sender_password = 'Password_of_Email_id'
+    receiver_email = 'Receiver_Email_id'
+    
+    # Create the email message
+    message = MIMEMultipart()
+    message['From'] = sender_email
+    message['To'] = receiver_email
+    message['Subject'] = subject
+    
+    # Attach the body to the email
+    message.attach(MIMEText(body, 'plain'))
+    
+    try:
+        # Set up the server and login
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()  # Secure the connection
+        server.login(sender_email, sender_password)
+        
+        # Send the email
+        server.send_message(message)
+        print('Email sent successfully!')
+        
+    except Exception as e:
+        print(f'Error: {e}')
+    
+    finally:
+        # Close the server connection
+        server.quit()
+
+# Hardcoded camera index for DroidCam
+camera_index = 1  # Replace with your DroidCam index
+
+# Load face detection and gender/age detection models
+faceProto = "opencv_face_detector.pbtxt"
+faceModel = "opencv_face_detector_uint8.pb"
+ageProto = "age_deploy.prototxt"
+ageModel = "age_net.caffemodel"
+genderProto = "gender_deploy.prototxt"
+genderModel = "gender_net.caffemodel"
+
+MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
+ageList = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
+genderList = ['Male', 'Female']
+
+faceNet = cv2.dnn.readNet(faceModel, faceProto)
+ageNet = cv2.dnn.readNet(ageModel, ageProto)
+genderNet = cv2.dnn.readNet(genderModel, genderProto)
+
+# Distance and camera setup parameters
+KNOWN_WIDTH = 14.0
+FOCAL_LENGTH = 650
+
+# Start video capture
+video = cv2.VideoCapture(camera_index)
+if not video.isOpened():
+    print(f"Error: Could not open camera with index {camera_index}.")
+    exit()
+
+padding = 20
+previous_male_count = 0
+
+while cv2.waitKey(1) < 0:
+    hasFrame, frame = video.read()
+    if not hasFrame:
+        print("Error: No frame captured")
+        break
+    
+    resultImg, faceBoxes = highlightFace(faceNet, frame)
+    if not faceBoxes:
+        print("No face detected")
+        cv2.imshow("Detecting age, gender, and distance", resultImg)
+        continue  # Skip the rest of the loop and continue to the next frame
+    
+    male_count = 0  # Counter for detected males
+    female_count = 0  # Counter for detected females
+    face_centers = []  # List to store face centers for distance calculation
+    
+    for faceBox in faceBoxes:
+        face = frame[max(0, faceBox[1] - padding):
+                     min(faceBox[3] + padding, frame.shape[0] - 1),
+                     max(0, faceBox[0] - padding):
+                     min(faceBox[2] + padding, frame.shape[1] - 1)]
+        
+        blob = cv2.dnn.blobFromImage(face, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
+        genderNet.setInput(blob)
+        genderPreds = genderNet.forward()
+        gender = genderList[genderPreds[0].argmax()]
+        
+        if gender == 'Male':
+            male_count += 1
+        elif gender == 'Female':
+            female_count += 1
+        
+        ageNet.setInput(blob)
+        agePreds = ageNet.forward()
+        age = ageList[agePreds[0].argmax()]
+        
+        color = (255, 0, 0) if gender == 'Male' else (203, 192, 255)
+        
+        cv2.rectangle(resultImg, (faceBox[0], faceBox[1]), (faceBox[2], faceBox[3]), color, 2)
+        cv2.putText(resultImg, f'{gender}, {age}', (faceBox[0], faceBox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color,)
+        
+        face_width = faceBox[2] - faceBox[0]
+        distance_from_camera = calculate_distance(KNOWN_WIDTH, FOCAL_LENGTH, face_width)
+        cv2.putText(resultImg, f"Dist: {int(distance_from_camera)} cm", (faceBox[0], faceBox[1] + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255))
+        
+        face_center = (faceBox[0] + face_width // 2, faceBox[1] + (faceBox[3] - faceBox[1]) // 2)
+        face_centers.append(face_center)
+        cv2.circle(resultImg, face_center, 5, (0, 255, 0), -1)
+
+    # Calculate and display distance between two faces
+    if len(face_centers) == 2:
+        face_distance_pixels = calculate_distance_between_faces(face_centers[0], face_centers[1])
+        known_real_world_distance = 60  # cm, adjust based on calibration
+        reference_pixel_distance = 300  # This is an assumed reference, adjust it with calibration
+        real_world_distance = (face_distance_pixels * known_real_world_distance) / reference_pixel_distance
+        cv2.line(resultImg, face_centers[0], face_centers[1], (0, 255, 255), 2)
+        mid_point = ((face_centers[0][0] + face_centers[1][0]) // 2, (face_centers[0][1] + face_centers[1][1]) // 2)
+        cv2.putText(resultImg, f"Distance: {int(real_world_distance)} cm", mid_point, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    print(f'Males detected: {male_count}')
+    print(f'Females detected: {female_count}')
+    
+    if male_count > female_count and male_count > previous_male_count:
+        send_email(
+            subject='Alert: Greater Number of Males Detected',
+            body=f'Number of males detected: {male_count} (greater than females: {female_count})'
+        )
+    
+    previous_male_count = male_count  # Update previous count
+    
+    cv2.imshow("Detecting age, gender, and distance", resultImg)
+
+video.release()
+cv2.destroyAllWindows()
