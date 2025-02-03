@@ -1,7 +1,3 @@
-Here's a project description you can use for your GitHub repository:
-
----
-
 # Real-Time Face Detection, Gender & Age Prediction, and Distance Measurement with Email Alerts
 
 ## Overview
@@ -89,7 +85,8 @@ This project uses **OpenCV** and **deep learning models** to detect faces in rea
 - Console outputs for the number of detected males and females.
 
 ## Screenshots
-*(Add screenshots of the face detection with age, gender, and distance displayed.)*
+![Screenshot 2024-09-11 112758](https://github.com/user-attachments/assets/3e2d97a5-125e-40a2-aebc-41954d7ac9f7)
+
 
 ## Future Improvements
 - Integrate **face recognition** for identifying known individuals.
